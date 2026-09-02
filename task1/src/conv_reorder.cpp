@@ -5,6 +5,32 @@
 
 void conv_reorder(const float* in, float* out, const float* ker,
                   int H, int W, int K) {
-    // TODO(student): replace this placeholder with your reordered implementation.
-    conv_naive(in, out, ker, H, W, K);
+    const int p = K / 2;
+    const int in_stride = W + 2 * p;  // padded row stride
+
+
+    // so first the kernel loop was nested inside the output matrix loop
+    // so each kernel unit was accessed again and again as we move to new output matrix cell
+    // so we nested the output matrix loop inside the kernel matrix loop
+    // now we take the i_th element of kernel and calculate and update all associated output cells in the same cycle
+    // once that is done, we dont need to access that kernel cell again
+    // this would help reduce access time
+  
+    for (int oy = 0; oy < H; ++oy) {
+        for (int ox = 0; ox < W; ++ox) {
+            out[oy * W + ox] = 0.0f;            
+        }
+    }
+
+    for (int ky = 0; ky < K; ++ky) {
+        for (int kx = 0; kx < K; ++kx) {
+            int conv_vl = ker[ky * K + kx];
+            for (int oy = 0; oy < H; ++oy) {
+                for (int ox = 0; ox < W; ++ox) {
+                    out[oy * W + ox] += in[(oy + ky) * in_stride + (ox + kx)] * conv_vl;
+                }
+            }
+        }
+    }    
+    //conv_naive(in, out, ker, H, W, K);
 }
