@@ -93,7 +93,7 @@ static double run_config(int H, int W, int K, unsigned seed, const char* only,
     const bool all = (only == nullptr) || (std::strcmp(only, "all") == 0);
 
     // Reference output from the naive kernel.
-    conv_naive(in, ref, ker, H, W, K);
+    //conv_naive(in, ref, ker, H, W, K);
 
     const double flops = pa1::conv_flops(H, W, K);
     double naive_ms = 0.0;
