@@ -1,88 +1,71 @@
-// conv_optimized.cpp  STAGE 5: PUT IT ALL TOGETHER
-// Hint: measure after every change. Not every "optimization" helps  let the numbers,
-// not intuition, decide.
-
 #include <immintrin.h>
 #include <algorithm>
 #include "convolution.h"
+
 #ifndef TILE
-#define TILE 32     
+#define TILE 32
 #endif
-static void conv_tiled_simd_k3(const float* __restrict__ in, float* __restrict__ out,
-                                int H, int W, const float* __restrict__ k) {
-    const int OH = H - 3 + 1;
-    const int OW = W - 3 + 1;
+static_assert(TILE % 8 == 0, "TILE must be a multiple of 8 to keep every tile 8-aligned");
+
+static void conv_optimized_k3(const float* __restrict__ in, float* __restrict__ out,
+                               const float* __restrict__ ker, int H, int W) {
+    const int PW = W + 2;
+
     __m256 w[9];
-    for (int t = 0; t < 9; t++) w[t] = _mm256_set1_ps(k[t]);
-    for (int ti = 0; ti < OH; ti += TILE) {
-        int imax = std::min(ti + TILE, OH);
-        for (int tj = 0; tj < OW; tj += TILE) {
-            int jmax = std::min(tj + TILE, OW);
-            for (int i = ti; i < imax; i++) {
-                const float* r0 = in + (i + 0) * W;
-                const float* r1 = in + (i + 1) * W;
-                const float* r2 = in + (i + 2) * W;
-                int j = tj;
-                for (; j <= jmax - 8; j += 8) {
-                    __m256 acc = _mm256_mul_ps(_mm256_loadu_ps(r0 + j),     w[0]);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r0 + j + 1), w[1], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r0 + j + 2), w[2], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r1 + j),     w[3], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r1 + j + 1), w[4], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r1 + j + 2), w[5], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r2 + j),     w[6], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r2 + j + 1), w[7], acc);
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r2 + j + 2), w[8], acc);
-                    _mm256_storeu_ps(out + i * OW + j, acc);
-                }
-                for (; j < jmax; j++) {   
-                    out[i * OW + j] =
-                        r0[j]*k[0] + r0[j+1]*k[1] + r0[j+2]*k[2] +
-                        r1[j]*k[3] + r1[j+1]*k[4] + r1[j+2]*k[5] +
-                        r2[j]*k[6] + r2[j+1]*k[7] + r2[j+2]*k[8];
+    for (int t = 0; t < 9; t++) w[t] = _mm256_set1_ps(ker[t]);
+
+    for (int ty = 0; ty < H; ty += TILE) {
+        int ymax = std::min(ty + TILE, H);
+        for (int tx = 0; tx < W; tx += TILE) {
+            int xmax = std::min(tx + TILE, W);
+            for (int y = ty; y < ymax; y++) {
+                const float* r0 = in + (y + 0) * PW;
+                const float* r1 = in + (y + 1) * PW;
+                const float* r2 = in + (y + 2) * PW;
+                for (int x = tx; x < xmax; x += 8) {
+                    __m256 acc = _mm256_mul_ps(_mm256_loadu_ps(r0 + x),     w[0]);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r0 + x + 1), w[1], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r0 + x + 2), w[2], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r1 + x),     w[3], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r1 + x + 1), w[4], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r1 + x + 2), w[5], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r2 + x),     w[6], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r2 + x + 1), w[7], acc);
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(r2 + x + 2), w[8], acc);
+                    _mm256_storeu_ps(out + y * W + x, acc);
                 }
             }
         }
     }
 }
-static void conv_tiled_simd_generic(const float* __restrict__ in, float* __restrict__ out,
-                                     int H, int W, const float* __restrict__ kernel, int K) {
-    const int OH = H - K + 1;
-    const int OW = W - K + 1;
-    for (int ti = 0; ti < OH; ti += TILE) {
-        int imax = std::min(ti + TILE, OH);
-        for (int tj = 0; tj < OW; tj += TILE) {
-            int jmax = std::min(tj + TILE, OW);
-            for (int i = ti; i < imax; i++) {
-                int j = tj;
-                for (; j <= jmax - 8; j += 8) {
+
+static void conv_optimized_generic(const float* __restrict__ in, float* __restrict__ out,
+                                    const float* __restrict__ ker, int H, int W, int K) {
+    const int p = K / 2;
+    const int PW = W + 2 * p;
+
+    for (int ty = 0; ty < H; ty += TILE) {
+        int ymax = std::min(ty + TILE, H);
+        for (int tx = 0; tx < W; tx += TILE) {
+            int xmax = std::min(tx + TILE, W);
+            for (int y = ty; y < ymax; y++) {
+                for (int x = tx; x < xmax; x += 8) {
                     __m256 acc = _mm256_setzero_ps();
-                    for (int ki = 0; ki < K; ki++) {
-                        const float* row = in + (i + ki) * W + j;
-                        for (int kj = 0; kj < K; kj++) {
-                            __m256 wv = _mm256_set1_ps(kernel[ki * K + kj]);
-                            acc = _mm256_fmadd_ps(_mm256_loadu_ps(row + kj), wv, acc);
+                    for (int ky = 0; ky < K; ky++) {
+                        const float* row = in + (y + ky) * PW + x;
+                        for (int kx = 0; kx < K; kx++) {
+                            __m256 wv = _mm256_set1_ps(ker[ky * K + kx]);
+                            acc = _mm256_fmadd_ps(_mm256_loadu_ps(row + kx), wv, acc);
                         }
                     }
-                    _mm256_storeu_ps(out + i * OW + j, acc);
-                }
-                for (; j < jmax; j++) {
-                    float acc = 0.0f;
-                    for (int ki = 0; ki < K; ki++) {
-                        const float* row = in + (i + ki) * W + j;
-                        for (int kj = 0; kj < K; kj++)
-                            acc += row[kj] * kernel[ki * K + kj];
-                    }
-                    out[i * OW + j] = acc;
+                    _mm256_storeu_ps(out + y * W + x, acc);
                 }
             }
         }
     }
 }
-void conv_tiled_simd(const float* input, float* output,
-                      int H, int W, const float* kernel, int K) {
-    if (K == 3) conv_tiled_simd_k3(input, output, H, W, kernel);
-    else        conv_tiled_simd_generic(input, output, H, W, kernel, K);
+
+void conv_optimized(const float* in, float* out, const float* ker, int H, int W, int K) {
+    if (K == 3) conv_optimized_k3(in, out, ker, H, W);
+    else        conv_optimized_generic(in, out, ker, H, W, K);
 }
-
-
